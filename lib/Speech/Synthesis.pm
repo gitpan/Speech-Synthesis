@@ -3,7 +3,7 @@ package Speech::Synthesis;
 use warnings;
 use strict;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 eval "use Win32::MSAgent 0.05";
 eval "use Win32::SAPI4 0.07";
@@ -11,7 +11,7 @@ eval "use Win32::SAPI5 0.04";
 eval "use Win32::OLE";
 eval "use Win32::Locale";
 eval "use Mac::Speech";
-eval "use Festival::Client::Async";
+eval "use Festival::Client::Async qw(parse_lisp)";
 use Locale::Language;
 use Locale::Country;
 
@@ -251,7 +251,7 @@ sub InstalledEngines
     push @engines, 'SAPI5' unless $@;
     $engine = eval "Mac::Speech::CountVoices()";
     push @engines, 'MacSpeech' unless $@;
-    $engine = eval "Festival::Client::Async->new()";
+    $engine = eval 'Festival::Client::Async->new() || die $!';
     push @engines, 'Festival' unless $@;
     return @engines;
 }
@@ -291,7 +291,7 @@ sub InstalledLanguages
     }
     elsif ($params{engine} eq 'Festival')
     {
-        # TODO
+        return ('unknown');
     }
     return @alllangs;
 }
@@ -397,7 +397,32 @@ sub InstalledVoices
     }
     elsif ($params{engine} eq 'Festival')
     {
-        #TODO
+        my $fest = Festival::Client::Async->new() || die "Can't connect: $!";
+        $fest->server_eval_sync("(voice.list)",
+                                {
+                                    LP => sub {
+                                                    my $l = shift;
+                                                    my $p = parse_lisp($l);
+                                                     @allvoices = map {{name => $_, id => $_ }} @$p
+                                                },
+                                    WV => sub {}
+                                });
+        foreach my $voice (@allvoices)
+        {
+            $fest->server_eval_sync('(voice.description "'.$voice->{id}.'")',
+                                     {
+                                         LP => sub {
+                                                         my $l = shift;
+                                                         my $p = parse_lisp($l);
+                                                         $voice->{description} = $p eq 'nil' ? undef : $p;
+                                                         $voice->{age} = undef;
+                                                         $voice->{gender} = undef;
+                                                         $voice->{language} = 'unknown';
+                                                     },
+                                         WV => sub {}
+                                     });
+
+        }
     }
     return @allvoices;
 }
@@ -430,7 +455,7 @@ sub new
     }
     $self->{_engine} = $params{engine};
     $self->{_voice} = $params{voice};
-    $self->{_async} = $params{async} || 1;
+    $self->{_async} = exists($params{async}) ? $params{async} : 1;
     if ($self->{_engine} eq 'MSAgent')
     {
         unless ((exists $params{language}) && (exists $params{avatar}))
@@ -468,7 +493,7 @@ sub getobject
     }
     elsif ($self->{_engine} eq 'Festival')
     {
-        #TODO
+        return $self->{_fest};
     }
 }
 
@@ -497,7 +522,7 @@ sub AUTOLOAD
     }
     elsif ($self->{_engine} eq 'Festival')
     {
-        #TODO
+        $self->{_fest}->$auto(@params);
     }
 }
 
@@ -525,30 +550,32 @@ sub speak
         # if pVoice starts up using the Fluency engine. Very strange, but this
         # seems to be a workaround...
         $self->{_sapi4}->TextData(0,0,$text);
-        unless ($self->{_async})
-        {
-            sleep(0.5) unless ($self->{_sapi4}->Speaking);
-            do {} while ($self->{_sapi4}->Speaking);
-        }
     }
     elsif ($self->{_engine} eq 'SAPI5')
     {
+        my $status = $self->{_sapi5}->Status;
         $self->{_sapi5}->Speak($text);
         unless ($self->{_async})
         {
-            my $status = $self->{_sapi5}->Status;
-            do {} until ($status->{RunningState} == 2);
+            do {} while ($status->{RunningState} == 2);
         }
     }
     elsif ($self->{_engine} eq 'MacSpeech')
     {
-        unless ($self->{_async}){ do {} while (SpeechBusy())}
         SpeakText($self->{_macspeech}, $text);
         unless ($self->{_async}){ do {} while (SpeechBusy())}
     }
     elsif ($self->{_engine} eq 'Festival')
     {
-        #TODO
+        if ($self->{_async})
+        {
+            $self->{_fest}->server_eval('(SayText "'.$text.'")');
+            if ($self->{_fest}->write_pending) { while (defined(my $buf = $self->{_fest}->write_more)) {last unless $buf} }
+        }
+        else
+        {
+            $self->{_fest}->server_eval_sync('(SayText "'.$text.'")', { LP => sub {}, WV => sub {} }) || die "Festival error";
+        }
     }
 }
 
@@ -635,6 +662,10 @@ sub _initmacspeech
 
 sub _initfestival
 {
+    my $self = shift;
+    return unless $self->{_engine} eq 'Festival';
+    $self->{_fest} = Festival::Client::Async->new();
+    $self->{_fest}->server_eval_sync('(voice.select "'.$self->{_voice}.'")', { LP => sub {}, WV => sub {} }) || die "Festival error";
 }
 
 sub DESTROY
@@ -659,14 +690,37 @@ Speech::Synthesis - A generic interface for different Text To Speech Engines
 
 =head1 VERSION
 
-This is Speech::Synthesis 0.01
+This is Speech::Synthesis 0.02
 
 =head1 SYNOPSIS
 
     use Speech::Synthesis;
+    my $engine = 'SAPI5'; # or 'SAPI4', 'MSAgent', 'MacSpeech' or 'Festival' 
+    my @voices = Speech::Synthesis->InstalledVoices(engine => $engine);
+    my @avatars = Speech::Synthesis->InstalledAvatars(engine => $engine);
+    foreach my $voice (@voices)
+    {
+        my %params = (  engine   => $engine,
+                        avatar   => undef,
+                        language => $voice->{language},
+                        voice    => $voice->{id},
+                        async    => 0
+                        );
+        my $ss = Speech::Synthesis->new( %params );
+        $ss->speak($voice->{description}||"test");
+    }
 
-    my $foo = Speech::Synthesis->new();
-    ...
+=head1 DESCRIPTION
+
+There are all sorts of Speech Synthesis (or Text To Speech) modules
+on CPAN, supporting all kinds of different Speech APIs. However, each
+of these modules has its own functions and methods, and writing platform-independent
+code using these modules is a hell.
+Therefore Speech::Synthesis provides one API that supports many different
+speech APIs, like Mac::Speech on OS X, Win32::SAPI4, Win32::SAPI5 and
+Win32::MSAgent on Win32 platforms, and Festival::Client::Async on all
+other platforms. You never have to worry about their different ways: just use
+Speech::Synthesis!
 
 =head1 CLASS METHODS
 
@@ -685,7 +739,7 @@ platform, it may return one or more of the following:
 
 =item 'MacSpeech' (OS X only)
 
-=item 'Festival' (Not implemented yet)
+=item 'Festival' (only connects to the default port on localhost)
 
 =back
 
@@ -697,6 +751,8 @@ capitalized code to identify a specific country. By catenating a language design
 with an underscore character and a regional designator, you get a designator that
 identifies the locale for a specific language and country. It could return a list like
 ('en_US', 'en_GB', 'fr_CA', 'nl_NL').
+Festival will always return 'unknown', since it doesn't seem to be possible to
+query the language for a voice
 
 =head2 @voices = Speech::Synthesis->InstalledVoices(%options)
 
@@ -767,7 +823,7 @@ It might be used for other engines in the future.
 
 This parameter defines wether we will wait until speaking finishes or not.
 By default, async = 1. If you want your code to wait until it finishes
-speaking, set it to 0. (not supported for MSAgent)
+speaking, set it to 0. (not supported for MSAgent and SAPI4)
 
 =back
 
@@ -788,8 +844,7 @@ This method speaks the $string using the selected engine and the selected voice.
 
 =head1 BUGS AND CAVEATS
 
-The working of asynchronous speecht doesn't really work yet. It seems to work for SAPI5 only.
-Festival support is being worked on.
+The working of asynchronous speech doesn't work on MSAgent and SAPI5.
 
 =head1 AUTHOR
 

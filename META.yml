@@ -1,5 +1,5 @@
 name: Speech-Synthesis
-version: 0.01
+version: 0.02
 abstract: A generic interface for different Text To Speech Engines
 author: Jouke Visser <jouke@pvoice.org>
 license: perl

@@ -11,7 +11,7 @@ foreach my $engine (@engines)
     my @voices = Speech::Synthesis->InstalledVoices(engine => $engine);
     $tests+= scalar(@voices);
 }
-plan tests => $tests;
+plan(tests => $tests);
 
 foreach my $engine (@engines)
 {
@@ -25,8 +25,8 @@ foreach my $engine (@engines)
                         avatar   => @avatars ? $avatars[0] : undef,
                         language => $voice->{language},
                         voice    => $voice->{id},
-                        async    => 0);
-#        diag(Dumper $voice);
+                        async    => 0
+                        );
         my $ss = Speech::Synthesis->new( %params );
         isa_ok($ss, 'Speech::Synthesis');
         $ss->speak($voice->{description}||"test");

@@ -22,13 +22,11 @@ elsif ($^O eq 'MSWin32')
     $ok = 1 unless $@;
     eval "use Win32::MSAgent";
     $ok = 1 unless $@;
-    recommends('Win32::SAPI5') unless $ok;
+    requires('Win32::SAPI5') unless $ok;
 }
 else
 {
-    print STDERR "Festival is not yet supported. Speech::Synthesis currently only works on OS X with Mac::Speech and Win32 with Win32::SAPI4, Win32::SAPI5 or Win32::MSAgent";
-    print STDERR "Not writing a makefile";
-    die;
+    requires('Festival::Client::Async');
 }
 &Meta->write();
 &Makefile->write();

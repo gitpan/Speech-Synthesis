@@ -1,5 +1,7 @@
 Revision history for Speech-Synthesis
 
-0.01    Date/time
-        First version, released on an unsuspecting world.
+0.01    August 8, 2005
+        First version, support for SAPI4, SAPI5, MSAgent and MacSpeech
+0.02    August 11, 2005
+        Second release, supporting Festival too
 
