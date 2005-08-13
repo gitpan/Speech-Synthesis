@@ -23,6 +23,8 @@ elsif ($^O eq 'MSWin32')
     eval "use Win32::MSAgent";
     $ok = 1 unless $@;
     requires('Win32::SAPI5') unless $ok;
+    requires('Win32::Locale');
+    requires('Win32::OLE');
 }
 else
 {

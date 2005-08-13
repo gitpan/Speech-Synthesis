@@ -3,7 +3,7 @@ package Speech::Synthesis;
 use warnings;
 use strict;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 eval "use Win32::MSAgent 0.05";
 eval "use Win32::SAPI4 0.07";
@@ -12,6 +12,7 @@ eval "use Win32::OLE";
 eval "use Win32::Locale";
 eval "use Mac::Speech";
 eval "use Festival::Client::Async qw(parse_lisp)";
+# These two are core modules
 use Locale::Language;
 use Locale::Country;
 
@@ -137,7 +138,7 @@ my $LANGUAGES =  {
 my $REGIONS = {
    0   => 'United States',
    1   => 'France',
-   2   => 'Britain',
+   2   => 'Great Britain',
    3   => 'Germany',
    4   => 'Italy',
    5   => 'Netherlands',
@@ -238,20 +239,26 @@ my $REGIONS = {
    108 => 'Ireland'          
 };
 
+our $DIALECTS = {
+    'flemish'   => 'Belgium',
+    'american'  => 'United States',
+    'castilian' => 'Spain'
+                };
+
 sub InstalledEngines
 {
     my $class = shift;
     my @engines = ();
     my $engine;
-    $engine = eval "Win32::MSAgent->new()";
+    $engine = eval "use Win32::MSAgent";
     push @engines, 'MSAgent' unless $@;
-    $engine = eval "Win32::SAPI4::DirectSpeechSynthesis->new()";
-    push @engines, 'SAPI4' unless $@;
-    $engine = eval "Win32::SAPI5::SpVoice->new()";
-    push @engines, 'SAPI5' unless $@;
-    $engine = eval "Mac::Speech::CountVoices()";
-    push @engines, 'MacSpeech' unless $@;
-    $engine = eval 'Festival::Client::Async->new() || die $!';
+    $engine = eval "use Win32::SAPI4";
+    push @engines, 'SAPI4' unless  $@;
+    $engine = eval "use Win32::SAPI5";
+    push @engines, 'SAPI5' unless  $@;
+    $engine = eval "use Mac::Speech";
+    push @engines, 'MacSpeech' unless  $@;
+    $engine = eval 'use Festival::Client::Async';
     push @engines, 'Festival' unless $@;
     return @engines;
 }
@@ -277,6 +284,7 @@ sub InstalledLanguages
     }
     elsif ($params{engine} eq 'MacSpeech')
     {
+        my %langs;
         my $count = CountVoices();
         my %maclangs = ();        
         for (my $i = 0; $i++ < $count; )
@@ -285,13 +293,21 @@ sub InstalledLanguages
             my $desc  = ${GetVoiceDescription($voice)};
             my ($synt, $id, $version,$nlen,$name,$clen,$comment,$gender,$age,$script,$language,$region)
                     = unpack("x4 a4 l l C a63 C a255 s s s s s", $desc);
-            push @alllangs, "$LANGUAGES->{$language} ($REGIONS->{$region})";
+            $langs{language2code($LANGUAGES->{$language}).'_'.uc(country2code($REGIONS->{$region}))} = 1;
         }
-        @alllangs = map {/(.+?)\((.+)\)/;my $l = $1;chop $l;language2code($l).'_'.uc(country2code($2));} @alllangs;
+        @alllangs = keys %langs;
     }
     elsif ($params{engine} eq 'Festival')
     {
-        return ('unknown');
+        my %langs;
+        my @voices = Speech::Synthesis->InstalledVoices(engine => 'Festival',
+                                                        host   => $params{host},
+                                                        port   => $params{port});
+        foreach my $voice(@voices)
+        {
+            $langs{$voice->{language}} = 1;
+        }
+        @alllangs = keys %langs;
     }
     return @alllangs;
 }
@@ -397,7 +413,8 @@ sub InstalledVoices
     }
     elsif ($params{engine} eq 'Festival')
     {
-        my $fest = Festival::Client::Async->new() || die "Can't connect: $!";
+        my $fest = Festival::Client::Async->new($params{host}, $params{port}) || warn "No festival server seems to be running: $!";
+        return () unless ref $fest;
         $fest->server_eval_sync("(voice.list)",
                                 {
                                     LP => sub {
@@ -409,15 +426,30 @@ sub InstalledVoices
                                 });
         foreach my $voice (@allvoices)
         {
-            $fest->server_eval_sync('(voice.description "'.$voice->{id}.'")',
+            $fest->server_eval_sync("(voice.description '".$voice->{id}.')',
                                      {
                                          LP => sub {
                                                          my $l = shift;
                                                          my $p = parse_lisp($l);
-                                                         $voice->{description} = $p eq 'nil' ? undef : $p;
-                                                         $voice->{age} = undef;
-                                                         $voice->{gender} = undef;
-                                                         $voice->{language} = 'unknown';
+                                                         if ($p eq 'nil')
+                                                         {
+                                                            $voice->{description} = undef;
+                                                            $voice->{age} = undef;
+                                                            $voice->{gender} = undef;
+                                                            $voice->{language} = 'unknown';
+                                                         }
+                                                         else
+                                                         {
+                                                            my @return = @{$p->[1]};
+                                                            my %h = map {$_->[0] => $_->[1]} @return;
+                                                            $voice->{description} = $h{description};
+                                                            $voice->{age} = undef;
+                                                            $voice->{gender} = $h{gender};
+                                                            $h{dialect} =~ s/['"]//g;
+                                                            $voice->{language} = lc(language2code($h{language}));
+                                                            $voice->{language} = sprintf("%s_%s", lc(language2code($h{language})), uc(country2code($DIALECTS->{$h{dialect}}))) if exists $DIALECTS->{$h{dialect}};
+                                                            $voice->{language} = sprintf("%s_%s", lc(language2code($h{language})), uc(country2code($h{dialect}))) if country2code($h{dialect});
+                                                         }
                                                      },
                                          WV => sub {}
                                      });
@@ -432,7 +464,7 @@ sub InstalledAvatars
     my $class = shift;
     my %params = @_;
     return () unless (exists $params{engine}) && ($params{engine} eq 'MSAgent');
-    my $agent = Win32::MSAgent->new();
+    my $agent = Win32::MSAgent->new() || die "Can't start Microsoft Agent";
     return $agent->GetInstalledCharacters if defined $agent;
 }
 
@@ -466,6 +498,11 @@ sub new
         }
         $self->{_language}  = $params{language};
         $self->{_avatar} = $params{avatar};
+    }
+    elsif ($self->{_engine} eq 'Festival')
+    {
+        $self->{_host} = $params{host} || 'localhost';
+        $self->{_port} = $params{port} || 1314;
     }
     $self->_init();
     return $self;
@@ -567,6 +604,7 @@ sub speak
     }
     elsif ($self->{_engine} eq 'Festival')
     {
+        $text =~ s/\"/\'/g;
         if ($self->{_async})
         {
             $self->{_fest}->server_eval('(SayText "'.$text.'")');
@@ -574,7 +612,7 @@ sub speak
         }
         else
         {
-            $self->{_fest}->server_eval_sync('(SayText "'.$text.'")', { LP => sub {}, WV => sub {} }) || die "Festival error";
+            $self->{_fest}->server_eval_sync('(SayText "'.$text.'")', { LP => sub {}, WV => sub {} }) || warn "Festival error";
         }
     }
 }
@@ -664,7 +702,7 @@ sub _initfestival
 {
     my $self = shift;
     return unless $self->{_engine} eq 'Festival';
-    $self->{_fest} = Festival::Client::Async->new();
+    $self->{_fest} = Festival::Client::Async->new($self->{_host}, $self->{_port}) || die "No festival server seems to be running: $!";
     $self->{_fest}->server_eval_sync('(voice.select "'.$self->{_voice}.'")', { LP => sub {}, WV => sub {} }) || die "Festival error";
 }
 
@@ -690,7 +728,7 @@ Speech::Synthesis - A generic interface for different Text To Speech Engines
 
 =head1 VERSION
 
-This is Speech::Synthesis 0.02
+This is Speech::Synthesis 0.03
 
 =head1 SYNOPSIS
 
@@ -743,7 +781,7 @@ platform, it may return one or more of the following:
 
 =back
 
-=head2 @langs = Speech::Synthesis->InstalledLanguages(engine => $engine)
+=head2 @langs = Speech::Synthesis->InstalledLanguages(%params)
 
 This method queries the installed languages for the specified engine (see 'InstalledEngines').
 The data that is returned uses the ISO 3166-1 conventions. This specification uses a two-letter,
@@ -751,8 +789,29 @@ capitalized code to identify a specific country. By catenating a language design
 with an underscore character and a regional designator, you get a designator that
 identifies the locale for a specific language and country. It could return a list like
 ('en_US', 'en_GB', 'fr_CA', 'nl_NL').
-Festival will always return 'unknown', since it doesn't seem to be possible to
-query the language for a voice
+Festival may return only a two letter language code, since the countrycode cannot always
+be determined.
+Valid parameters that you may provide as a hash to this method are:
+
+=over 4
+
+=item engine
+
+This can be one of the values that InstalledEngines returns
+
+=item host
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the host that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's localhost.
+
+=item port
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the port that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's 1319.
+
+=back
 
 =head2 @voices = Speech::Synthesis->InstalledVoices(%options)
 
@@ -765,6 +824,18 @@ voices. These options are:
 =item engine
 
 This takes an engine name as used in InstalledEngines (mandatory).
+
+=item host
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the host that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's localhost.
+
+=item port
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the port that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's 1319.
 
 =item language
 
@@ -801,6 +872,18 @@ Valid parameters are:
 
 The value for the 'engine' key can be one of the speech engine values described
 in the InstalledEngines class method.
+
+=item host
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the host that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's localhost.
+
+=item port
+
+This is an optional parameter, which is only used for the 'Festival'
+engine. It represents the port that the festival server is running on.
+If you don't provide it, Speech::Synthesis assumes it's 1319.
 
 =item voice
 

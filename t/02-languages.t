@@ -9,8 +9,11 @@ plan tests => scalar(@engines);
 
 foreach my $engine (@engines)
 {
-    my @langs = Speech::Synthesis->InstalledLanguages(engine => $engine);
-SKIP:{    skip "No languages installed for engine $engine", 1 unless @langs;
-    ok(scalar(@langs) > 0, "You have installed languages ".join(", ", @langs)." for engine $engine");
-};
+    my @langs = Speech::Synthesis->InstalledLanguages(engine => $engine,
+                                                        host   => $ENV{FESTIVAL_HOST},
+                                                        port   => $ENV{FESTIVAL_PORT});
+SKIP:{
+        skip "No languages installed for engine $engine", 1 unless @langs;
+        ok(scalar(@langs) > 0, "You have installed languages ".join(", ", @langs)." for engine $engine");
+     };
 }
